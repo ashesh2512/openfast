@@ -1024,10 +1024,11 @@ SUBROUTINE BD_ComputeIniNodalCrv(e1, phi, cc, ErrStat, ErrMsg)
    INTEGER(IntKi), INTENT(  OUT)  :: ErrStat       !< Error status of the operation
    CHARACTER(*),   INTENT(  OUT)  :: ErrMsg        !< Error message if ErrStat /= ErrID_None
 
-   REAL(BDKi)                     :: e2(3)         !< Unit normal vector
-   REAL(BDKi)                     :: Rr(3,3)       !< Initial rotation matrix
-   REAL(BDKi)                     :: PhiRad        !< Phi in radians
-   REAL(BDKi)                     :: Delta
+   REAL(BDKi)                     :: curv_R(3,3), twist_R(3,3), comp_R(3,3) !< Rotation matrices
+   REAL(BDKi)                     :: ec(3), ez(3)  !< Z-axis
+   REAL(BDKi)                     :: phiRad        !< angle in radians
+   REAL(BDKi)                     :: q0, q1, q2, q3!< quaternion
+   REAL(BDKi), PARAMETER          :: eps = SQRT(EPSILON(eps)) !< tolerance for checking tangent vector
 
    INTEGER(IntKi)                 :: ErrStat2      ! Temporary Error status
    CHARACTER(ErrMsgLen)           :: ErrMsg2       ! Temporary Error message
@@ -1037,20 +1038,51 @@ SUBROUTINE BD_ComputeIniNodalCrv(e1, phi, cc, ErrStat, ErrMsg)
    ErrStat = ErrID_None
    ErrMsg  = ""
 
-   PhiRad = phi*D2R_D  ! convert to radians
+   ! determine axis along which tangent vector is rotated
+   ez = (/ 0.0, 0.0, 1.0 /) ! vector along z-axis
+   if((abs(e1(1)-ez(1)).LT.eps) .AND. (abs(e1(2)-ez(2)).LT.eps) .AND. (abs(e1(3)-ez(3)).LT.eps)) then
+      call eye(curv_R, ErrStat2, ErrMsg2)
+   else
+      ec = cross_product(ez,e1)
+      ec(1) = ec(1)/NORM2(ec); ec(2) = ec(2)/NORM2(ec);ec(3) = ec(3)/NORM2(ec);
+      PhiRad = atan(DOT_PRODUCT(ec,cross_product(ez,e1)),DOT_PRODUCT(ez,e1))
 
-      ! Note that e1 corresponds with the Z-axis direction in our formulation.  For Beam theory, this would be the x-axis.
-   Rr(:,3)  =  e1(:)
+      ! rotation to account for ez to e1 based on quaternion
+      q0 = cos(0.5*PhiRad); q1 = sin(0.5*PhiRad)*ec(1); q2 = sin(0.5*PhiRad)*ec(2); q3 = sin(0.5*PhiRad)*ec(3)
+      !
+      curv_R(1,1) = q0*q0 + q1*q1 - q2*q2 - q3*q3
+      curv_R(1,2) = 2.0*(q1*q2 - q0*q3)
+      curv_R(1,3) = 2.0*(q0*q2 + q1*q3)
+      !
+      curv_R(2,1) = 2.0*(q1*q2 + q0*q3)
+      curv_R(2,2) = q0*q0 - q1*q1 + q2*q2 - q3*q3
+      curv_R(2,3) = 2.0*(q2*q3 - q0*q1)
+      !
+      curv_R(3,1) = 2.0*(q1*q3 - q0*q2)
+      curv_R(3,2) = 2.0*(q0*q1 + q2*q3)
+      curv_R(3,3) = q0*q0 - q1*q1 - q2*q2 + q3*q3
+   end if
 
-   e2(3)    = -(e1(1)*COS(PhiRad) + e1(2)*SIN(PhiRad))/e1(3)
-   Delta    = SQRT(1.0_BDKi + e2(3)*e2(3))
-   e2(1)    = COS(PhiRad)
-   e2(2)    = SIN(PhiRad)
-   e2       = e2 / Delta
-   Rr(:,1)  = e2
-   Rr(:,2)  = Cross_Product(e1,e2)
+   PhiRad = phi*D2R_D ! twist angle in radians
 
-   CALL BD_CrvExtractCrv(Rr, cc, ErrStat2, ErrMsg2)
+   ! rotation to account for ez to e1 based on quaternion
+   q0 = cos(0.5*PhiRad); q1 = sin(0.5*PhiRad)*e1(1); q2 = sin(0.5*PhiRad)*e1(2); q3 = sin(0.5*PhiRad)*e1(3)
+   !
+   twist_R(1,1) = q0*q0 + q1*q1 - q2*q2 - q3*q3
+   twist_R(1,2) = 2.0*(q1*q2 - q0*q3)
+   twist_R(1,3) = 2.0*(q0*q2 + q1*q3)
+   !
+   twist_R(2,1) = 2.0*(q1*q2 + q0*q3)
+   twist_R(2,2) = q0*q0 - q1*q1 + q2*q2 - q3*q3
+   twist_R(2,3) = 2.0*(q2*q3 - q0*q1)
+   !
+   twist_R(3,1) = 2.0*(q1*q3 - q0*q2)
+   twist_R(3,2) = 2.0*(q0*q1 + q2*q3)
+   twist_R(3,3) = q0*q0 - q1*q1 - q2*q2 + q3*q3
+
+   comp_R = matmul(twist_R,curv_R) ! composite rotation
+
+   CALL BD_CrvExtractCrv(comp_R, cc, ErrStat2, ErrMsg2)
       CALL SetErrStat(ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName)
       if (ErrStat >= AbortErrLev) return
 

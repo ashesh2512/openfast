@@ -12,7 +12,6 @@ subroutine test_BD_ComputeIniNodalCrv()
     
     implicit none
 
-    real(BDKi), dimension(3,3) :: r
     real(BDKi), dimension(3)   :: test_wmparams, baseline_wmparams
     real(BDKi)                 :: angle, param, n(3)
     character(1024)            :: testname
