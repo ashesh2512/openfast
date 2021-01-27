@@ -2644,8 +2644,7 @@ END SUBROUTINE BD_QPData_mEta_rho
 
 
 !-----------------------------------------------------------------------------------------------------------------------------------
-!> This subroutine calculates the elastic forces Fc and Fd
-!! It also calcuates the linearized matrices Oe, Pe, and Qe for N-R algorithm.
+!> This subroutine calcuates the linearized matrices Oe, Pe, and Qe for N-R algorithm.
 !!
 !! The equations used here can be found in the NREL publication CP-2C00-60759
 !! (http://www.nrel.gov/docs/fy14osti/60759.pdf)
@@ -2670,15 +2669,18 @@ SUBROUTINE BD_ElasticForce(nelem,p,m,fact)
    if (.not. fact) then
    
       do idx_qp=1,p%nqp
-         call Calc_Fc_Fd()
+         call Calc_Fc_Fd(m%qp%E1(:,idx_qp,nelem), m%qp%RR0(:,:,idx_qp,nelem), m%qp%kappa(:,idx_qp,nelem), &
+                         m%qp%Stif(:,:,idx_qp,nelem), p%Stif0_QP(:,:,(nelem-1)*p%nqp+idx_qp), &
+                         m%qp%Fc(:,idx_qp,nelem), m%qp%Fd(:,idx_qp,nelem))
       end do 
       
    else
    
       do idx_qp=1,p%nqp
       
-         call Calc_Fc_Fd()
-
+         call Calc_Fc_Fd(m%qp%E1(:,idx_qp,nelem), m%qp%RR0(:,:,idx_qp,nelem), m%qp%kappa(:,idx_qp,nelem), &
+                         m%qp%Stif(:,:,idx_qp,nelem), p%Stif0_QP(:,:,(nelem-1)*p%nqp+idx_qp), &
+                         m%qp%Fc(:,idx_qp,nelem), m%qp%Fd(:,idx_qp,nelem))
 
             !> ###Calculate the \f$ \underline{\underline{\mathcal{O}}} \f$ from equation (19)
             !!
@@ -2739,133 +2741,154 @@ SUBROUTINE BD_ElasticForce(nelem,p,m,fact)
       end do
       
    ENDIF
-
-contains
-   subroutine Calc_Fc_Fd()
-      REAL(BDKi)                                   :: e1s
-      REAL(BDKi)                                   :: eee(6)      !< intermediate array for calculation Strain and curvature terms of Fc
-      REAL(BDKi)                                   :: fff(6)      !< intermediate array for calculation of the elastic force, Fc
-     !REAL(BDKi)                                   :: Wrk(3)
-      
-   
-         !> ### Calculate the 1D strain, \f$ \underline{\epsilon} \f$, equation (5)
-         !! \f$ \underline{\epsilon} = \underline{x}^\prime_0 + \underline{u}^\prime -
-         !!             \left(\underline{\underline{R}}\underline{\underline{R}}_0\right) \bar{\imath}_1
-         !!          =  \underline{E}_1 -
-         !!             \left(\underline{\underline{R}}\underline{\underline{R}}_0\right) \bar{\imath}_1 \f$
-         !! where \f$ \bar{\imath}_1 \f$ is the unit vector along the \f$ x_1 \f$ direction in the inertial frame
-         !! (z in the IEC).  The last term simplifies to the first column of \f$ \underline{\underline{R}}\underline{\underline{R}}_0 \f$
-         !!
-         !! Note: \f$ \underline{\underline{R}}\underline{\underline{R}}_0 \f$ is used to go from the material basis into the inertial basis
-         !!       and the transpose for the other direction.
-      eee(1:3) = m%qp%E1(1:3,idx_qp,nelem) - m%qp%RR0(1:3,3,idx_qp,nelem)     ! Using RR0 z direction in IEC coords
-
-      
-         !> ### Set the 1D sectional curvature, \f$ \underline{\kappa} \f$, equation (5)
-         !! \f$ \underline{\kappa} = \underline{k} + \underline{\underline{R}}\underline{k}_i \f$
-         !!          where \f$ \underline{k} = \text{axial}\left(\underline{\underline{R}}^\prime\underline{\underline{R}}^T \right) \f$
-         !!          and   \f$ \underline{k}_i \f$ is the corresponding initial curvature vector (root reference).
-         !!    Note that \f$ \underline{k} \f$ can be calculated with rotation parameters as
-         !!       \f$ \underline{k} = \underline{\underline{H}}(\underline{p}) \underline{p}' \f$
-         !!
-         !!    \f$ \text{axial}\left( \underline{\underline{A}} \right) \f$ is defined as \n
-         !!    \f$ \text{axial}\left( \underline{\underline{A}} \right)
-         !!          =  \left\{  \begin{array}{c}  a_1   \\
-         !!                                        a_2   \\
-         !!                                        a_3   \end{array}\right\}
-         !!          =  \left\{  \begin{array}{c}  A_{32}   -  A_{23}   \\
-         !!                                        A_{13}   -  A_{31}   \\
-         !!                                        A_{21}   -  A_{12}   \end{array}\right\}
-         !!    \f$
-         !! In other words, \f$ \tilde{k} = \left(\underline{\underline{R}}^\prime\underline{\underline{R}}^T \right) \f$.
-         !! Note: \f$ \underline{\kappa} \f$ was already calculated in the BD_DisplacementQP routine
-      eee(4:6) = m%qp%kappa(1:3,idx_qp,nelem)
-
-
-   !FIXME: note that the k_i terms may not be documented correctly here.
-         !> ### Calculate the elastic force, \f$ \underline{\mathcal{F}}^C \f$
-         !! Using equations (15), (23), (24), and (5) we write the elastic force as\n
-         !!   \f$
-         !!    \underline{\mathcal{F}}^C
-         !!       =  \left\{ \begin{array}{c}   \underline{F}        \\
-         !!                                     \underline{M}        \end{array} \right\}
-         !!       = \left(\underline{\underline{R}}\underline{\underline{R}}_0\right)
-         !!          \underline{\underline{C}}
-         !!          \left(\underline{\underline{R}}\underline{\underline{R}}_0\right)^T
-         !!          \left\{ \begin{array}{c}  \underline{\epsilon}  \\
-         !!                                    \underline{\kappa}    \end{array} \right\}
-         !!   \f$
-         !!
-         !! Note then that the extension twist term is added to this so that we get 
-         !! \f$ \underline{\mathcal{F}}^C = \underline{F}^c_{a} + \underline{F}^c_{et} \f$
-         !!
-         !! where \f$ \underline{F}^c_{et} \f$ is the extension twist coupling term.
-
-         !> ###Calculate the first term.
-         !!    \f$ \underline{F}^c_a
-         !!       =  \left(\underline{\underline{R}}\underline{\underline{R}}_0\right)
-         !!          \underline{\underline{C}}
-         !!          \left(\underline{\underline{R}}\underline{\underline{R}}_0\right)^T
-         !!          \left\{  \begin{array}{c}
-         !!                \underline{\epsilon}    \\
-         !!                \underline{k}
-         !!          \end{array} \right\} \f$
-         !!
-      fff(1:6) = MATMUL(m%qp%Stif(:,:,idx_qp,nelem),eee)
-
-
-         !> ###Calculate the extension twist coupling.
-         !! This is calculated in the material basis, not in the rotated reference frame \f$ \underline{F}^c_a \f$ was calculated in.
-         !! First find \f$ \epsilon_1 \f$ and \f$ \kappa_1 \f$ in the material basis\n
-         !! \f$ \epsilon_{m} = \left( \underline{\underline{R}}\underline{\underline{R}}_0 \right) ^T \epsilon \f$ \n
-         !! and \n
-         !! \f$ \kappa_{m} = \left( \underline{\underline{R}}\underline{\underline{R}}_0 \right) ^T \underline{k}\f$ \n
-
-         ! Strain into the material basis (eq (39) of Dymore manual)
-      !Wrk(:) = MATMUL(TRANSPOSE(m%qp%RR0(:,:,idx_qp,nelem)),eee(1:3))
-      !e1s = Wrk(3)      !epsilon_{1} in material basis (for major axis of blade, which is z in the IEC formulation)
-      e1s = dot_product( m%qp%RR0(:,3,idx_qp,nelem), eee(1:3) )
-
-      !Wrk(:) = MATMUL(TRANSPOSE(m%qp%RR0(:,:,idx_qp,nelem)),eee(4:6))
-      !k1s = Wrk(3)      !kappa_{1} in material basis (for major axis of blade, which is z in the IEC formulation)
-      k1s = dot_product( m%qp%RR0(:,3,idx_qp,nelem), eee(4:6) )
-
-
-      !> Add extension twist coupling terms to the \f$ \underline{F}^c_{a} \f$\n
-      !! \f$ \underline{F}^c =
-      !!     \underline{F}^c_{a} + \underline{F}^c_{et} \f$\n
-      !! The extension twist term is calculated in the material basis, which can be simplified and rewritten as follows (_the details of this are fuzzy to me_):\n
-      !! \f$  \underline{F}^c_{et} =
-      !!     \begin{bmatrix}
-      !!          \frac{1}{2} C_{et} \kappa^2_{m}(1) \left(\underline{\underline{R}}\underline{\underline{R}}_0\right)_{:,1} \\
-      !!        C_{et} \kappa_{m}(1) \epsilon_{m}(1) \left(\underline{\underline{R}}\underline{\underline{R}}_0\right)_{:,1}
-      !!     \end{bmatrix}
-      !! \f$
-      !!
-      !! Where  \f$  C_{et} = C_{5,5} + C_{6,6} \f$ is the inertial term along major axis, \f$x\f$, in the material coordinate system
-      !! Note that with coverting to the FAST / IEC coordinate system, we now are using the Ixx and Iyy terms which are located at
-      !! \f$  C_{et} = C_{4,4} + C_{5,5} \f$
-      ! Refer Section 1.4 in "Dymore User's Manual - Formulation and finite element implementation of beam elements".
-      cet=  p%Stif0_QP(4,4,(nelem-1)*p%nqp+idx_qp) + p%Stif0_QP(5,5,(nelem-1)*p%nqp+idx_qp)     ! Dymore theory (22)
-      m%qp%Fc(1:3,idx_qp,nelem) = fff(1:3) + 0.5_BDKi*cet*k1s*k1s*m%qp%RR0(1:3,3,idx_qp,nelem)  ! Dymore theory (25a). Note z-axis is the length of blade.
-      m%qp%Fc(4:6,idx_qp,nelem) = fff(4:6) +          cet*e1s*k1s*m%qp%RR0(1:3,3,idx_qp,nelem)  ! Dymore theory (25b). Note z-axis is the length of blade.
-
-         !> ###Calculate \f$ \underline{\mathcal{F}}^d \f$, equation (16)
-         !! \f$ \underline{F}^d =
-         !!       \underline{\underline{\Upsilon}} \underline{\mathcal{F}}^c
-         !!    =  \begin{bmatrix}   \underline{\underline{0}}                 &  \underline{\underline{0}}  \\
-         !!                         \tilde{E}_1^T     &  \underline{\underline{0}}  \end{bmatrix}
-         !!       \underline{\mathcal{F}}^c
-         !!    =  \begin{bmatrix}   \underline{0} \\
-         !!                \left(\underline{\mathcal{F}}^c \times \underline{E}_1 \right)^T
-         !!       \end{bmatrix}  \f$
-      m%qp%Fd(1:3,idx_qp,nelem)  = 0.0_BDKi
-   ! ADP uu0 ref: If E1 is referenced against a different curve than Stif0_QP, there will be strange coupling terms here. 
-      m%qp%Fd(4:6,idx_qp,nelem)  = cross_product(m%qp%Fc(1:3,idx_qp,nelem), m%qp%E1(:,idx_qp,nelem))   
-      
-   end subroutine Calc_Fc_Fd
 END SUBROUTINE BD_ElasticForce
 
+!-----------------------------------------------------------------------------------------------------------------------------------
+!> This subroutine calculates the elastic forces Fc and Fd
+subroutine Calc_Fc_Fd(E1, RR0, kappa, Stif, Stif0, Fc, Fd)
+
+   REAL(BDKi), INTENT(IN   ) :: E1(3)      !< \f$ \underline{E}_1 = x_0^\prime + u^\prime \f$ (equation 23). E_1 is along the z direction.
+   REAL(BDKi), INTENT(IN   ) :: RR0(3,3)   !< Rotation matrix
+   REAL(BDKi), INTENT(IN   ) :: kappa(3)   !< Sectional curvature
+   Real(BDKi), INTENT(IN   ) :: Stif(6,6)  !< Stiffness matrix in the deformed orientation
+   Real(BDKi), INTENT(IN   ) :: Stif0(6,6) !< Stiffness matrix in the non-deformed orientation
+   Real(BDKi), INTENT(INOUT) :: Fc(6)      !< Fc component of elastic force from Bauchau's textbook
+   Real(BDKi), INTENT(INOUT) :: Fd(6)      !< Fd component of elastic force from Bauchau's textbook
+
+   REAL(BDKi)                :: cet        !< Eextension-twist stiffness coefficient
+   REAL(BDKi)                :: e1s        !< Axial extension
+   REAL(BDKi)                :: k1s        !< Blade's twist rate
+   REAL(BDKi)                :: eee(6)     !< intermediate array for calculation Strain and curvature terms of Fc
+   REAL(BDKi)                :: fff(6)     !< intermediate array for calculation of the elastic force, Fcs
+
+   !> ### Calculate the 1D strain, \f$ \underline{\epsilon} \f$, equation (5)
+   !! \f$ \underline{\epsilon} = \underline{x}^\prime_0 + \underline{u}^\prime -
+   !!             \left(\underline{\underline{R}}\underline{\underline{R}}_0\right) \bar{\imath}_1
+   !!          =  \underline{E}_1 -
+   !!             \left(\underline{\underline{R}}\underline{\underline{R}}_0\right) \bar{\imath}_1 \f$
+   !! where \f$ \bar{\imath}_1 \f$ is the unit vector along the \f$ x_1 \f$ direction in the inertial frame
+   !! (z in the IEC).  The last term simplifies to the first column of \f$ \underline{\underline{R}}\underline{\underline{R}}_0 \f$
+   !!
+   !! Note: \f$ \underline{\underline{R}}\underline{\underline{R}}_0 \f$ is used to go from the material basis into the inertial basis
+   !!       and the transpose for the other direction.
+   eee(1:3) = E1(1:3) - RR0(1:3,3)     ! Using RR0 z direction in IEC coords
+
+   !> ### Set the 1D sectional curvature, \f$ \underline{\kappa} \f$, equation (5)
+   !! \f$ \underline{\kappa} = \underline{k} + \underline{\underline{R}}\underline{k}_i \f$
+   !!          where \f$ \underline{k} = \text{axial}\left(\underline{\underline{R}}^\prime\underline{\underline{R}}^T \right) \f$
+   !!          and   \f$ \underline{k}_i \f$ is the corresponding initial curvature vector (root reference).
+   !!    Note that \f$ \underline{k} \f$ can be calculated with rotation parameters as
+   !!       \f$ \underline{k} = \underline{\underline{H}}(\underline{p}) \underline{p}' \f$
+   !!
+   !!    \f$ \text{axial}\left( \underline{\underline{A}} \right) \f$ is defined as \n
+   !!    \f$ \text{axial}\left( \underline{\underline{A}} \right)
+   !!          =  \left\{  \begin{array}{c}  a_1   \\
+   !!                                        a_2   \\
+   !!                                        a_3   \end{array}\right\}
+   !!          =  \left\{  \begin{array}{c}  A_{32}   -  A_{23}   \\
+   !!                                        A_{13}   -  A_{31}   \\
+   !!                                        A_{21}   -  A_{12}   \end{array}\right\}
+   !!    \f$
+   !! In other words, \f$ \tilde{k} = \left(\underline{\underline{R}}^\prime\underline{\underline{R}}^T \right) \f$.
+   !! Note: \f$ \underline{\kappa} \f$ was already calculated in the BD_DisplacementQP routine
+   eee(4:6) = kappa(1:3)
+
+   !FIXME: note that the k_i terms may not be documented correctly here.
+   !> ### Calculate the elastic force, \f$ \underline{\mathcal{F}}^C \f$
+   !! Using equations (15), (23), (24), and (5) we write the elastic force as\n
+   !!   \f$
+   !!    \underline{\mathcal{F}}^C
+   !!       =  \left\{ \begin{array}{c}   \underline{F}        \\
+   !!                                     \underline{M}        \end{array} \right\}
+   !!       = \left(\underline{\underline{R}}\underline{\underline{R}}_0\right)
+   !!          \underline{\underline{C}}
+   !!          \left(\underline{\underline{R}}\underline{\underline{R}}_0\right)^T
+   !!          \left\{ \begin{array}{c}  \underline{\epsilon}  \\
+   !!                                    \underline{\kappa}    \end{array} \right\}
+   !!   \f$
+   !!
+   !! Note then that the extension twist term is added to this so that we get
+   !! \f$ \underline{\mathcal{F}}^C = \underline{F}^c_{a} + \underline{F}^c_{et} \f$
+   !!
+   !! where \f$ \underline{F}^c_{et} \f$ is the extension twist coupling term.
+
+   !> ###Calculate the first term.
+   !!    \f$ \underline{F}^c_a
+   !!       =  \left(\underline{\underline{R}}\underline{\underline{R}}_0\right)
+   !!          \underline{\underline{C}}
+   !!          \left(\underline{\underline{R}}\underline{\underline{R}}_0\right)^T
+   !!          \left\{  \begin{array}{c}
+   !!                \underline{\epsilon}    \\
+   !!                \underline{k}
+   !!          \end{array} \right\} \f$
+   !!
+   fff(1:6) = MATMUL(Stif,eee)
+
+   call Calc_Ext_Twist(RR0, eee, Stif0, cet, e1s, k1s)
+
+   !> Add extension twist coupling terms to the \f$ \underline{F}^c_{a} \f$\n
+   !! \f$ \underline{F}^c =
+   !!     \underline{F}^c_{a} + \underline{F}^c_{et} \f$\n
+   !! The extension twist term is calculated in the material basis, which can be simplified and rewritten as follows (_the details of this are fuzzy to me_):\n
+   !! \f$  \underline{F}^c_{et} =
+   !!     \begin{bmatrix}
+   !!          \frac{1}{2} C_{et} \kappa^2_{m}(1) \left(\underline{\underline{R}}\underline{\underline{R}}_0\right)_{:,1} \\
+   !!        C_{et} \kappa_{m}(1) \epsilon_{m}(1) \left(\underline{\underline{R}}\underline{\underline{R}}_0\right)_{:,1}
+   !!     \end{bmatrix}
+   !! \f$
+   cet     = Stif0(4,4) + Stif0(5,5)                     ! Dymore theory (22)
+   Fc(1:3) = fff(1:3) + 0.5_BDKi*cet*k1s*k1s*RR0(1:3,3)  ! Dymore theory (25a). Note z-axis is the length of blade.
+   Fc(4:6) = fff(4:6) +          cet*e1s*k1s*RR0(1:3,3)  ! Dymore theory (25b). Note z-axis is the length of blade.
+
+   !> ###Calculate \f$ \underline{\mathcal{F}}^d \f$, equation (16)
+   !! \f$ \underline{F}^d =
+   !!       \underline{\underline{\Upsilon}} \underline{\mathcal{F}}^c
+   !!    =  \begin{bmatrix}   \underline{\underline{0}}                 &  \underline{\underline{0}}  \\
+   !!                         \tilde{E}_1^T     &  \underline{\underline{0}}  \end{bmatrix}
+   !!       \underline{\mathcal{F}}^c
+   !!    =  \begin{bmatrix}   \underline{0} \\
+   !!                \left(\underline{\mathcal{F}}^c \times \underline{E}_1 \right)^T
+   !!       \end{bmatrix}  \f$
+   Fd(1:3) = 0.0_BDKi
+   ! ADP uu0 ref: If E1 is referenced against a different curve than Stif0_QP, there will be strange coupling terms here.
+   Fd(4:6) = cross_product(Fc(1:3), E1)
+
+end subroutine Calc_Fc_Fd
+
+!-----------------------------------------------------------------------------------------------------------------------------------
+!> This subroutine calculates  components of the axial-twist coupling required by Calc_Fc_Fd
+SUBROUTINE Calc_Ext_Twist(RR0, eee, Stif0, cet, e1s, k1s)
+
+   REAL(BDKi), INTENT(IN   ) :: RR0(3,3)   !< Rotation matrix
+   REAL(BDKi), INTENT(IN   ) :: eee(6)     !< strain vector
+   Real(BDKi), INTENT(IN   ) :: Stif0(6,6) !< Stiffness matrix in the non-deformed orientation
+   REAL(BDKi), INTENT(INOUT) :: cet        !< Eextension-twist stiffness coefficient
+   REAL(BDKi), INTENT(INOUT) :: e1s        !< Axial extension
+   REAL(BDKi), INTENT(INOUT) :: k1s        !< Blade's twist rate
+
+
+   !> ###Calculate the extension twist coupling.
+   !! This is calculated in the material basis, not in the rotated reference frame \f$ \underline{F}^c_a \f$ was calculated in.
+   !! First find \f$ \epsilon_1 \f$ and \f$ \kappa_1 \f$ in the material basis\n
+   !! \f$ \epsilon_{m} = \left( \underline{\underline{R}}\underline{\underline{R}}_0 \right) ^T \epsilon \f$ \n
+   !! and \n
+   !! \f$ \kappa_{m} = \left( \underline{\underline{R}}\underline{\underline{R}}_0 \right) ^T \underline{k}\f$ \n
+
+   !Wrk(:) = MATMUL(TRANSPOSE(m%qp%RR0(:,:,idx_qp,nelem)),eee(1:3))
+   !e1s = Wrk(3)      !epsilon_{1} in material basis (for major axis of blade, which is z in the IEC formulation)
+   e1s = dot_product(RR0(:,3), eee(1:3))
+
+   !Wrk(:) = MATMUL(TRANSPOSE(m%qp%RR0(:,:,idx_qp,nelem)),eee(4:6))
+   !k1s = Wrk(3)      !kappa_{1} in material basis (for major axis of blade, which is z in the IEC formulation)
+   k1s = dot_product(RR0(:,3), eee(4:6))
+
+   !! \f$  C_{et} = C_{5,5} + C_{6,6} \f$ is the inertial term along major axis, \f$x\f$, in the material coordinate system
+   !! Note that with coverting to the FAST / IEC coordinate system, we now are using the Ixx and Iyy terms which are located at
+   !! \f$  C_{et} = C_{4,4} + C_{5,5} \f$
+   ! Refer Section 1.4 in "Dymore User's Manual - Formulation and finite element implementation of beam elements".
+   cet = Stif0(4,4) + Stif0(5,5)                     ! Dymore theory (22)
+
+end subroutine Calc_Ext_Twist
 
 !-----------------------------------------------------------------------------------------------------------------------------------
 !> This subroutine calculates the mass quantities at the quadrature point
