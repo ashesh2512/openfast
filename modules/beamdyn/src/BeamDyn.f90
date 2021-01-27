@@ -2656,7 +2656,8 @@ SUBROUTINE BD_ElasticForce(nelem,p,m,fact)
    LOGICAL,                      INTENT(IN   )  :: fact        !< Boolean to calculate the Jacobian
 
    REAL(BDKi)                                   :: cet         !< for storing the \f$ I_{yy} + I_{zz} \f$ inertia term
-   REAL(BDKi)                                   :: k1s
+   REAL(BDKi)                                   :: k1s         !< Blade's twist rate
+   REAL(BDKi)                                   :: eee(6)      !< intermediate array for calculation Strain and curvature terms of Fc
    REAL(BDKi)                                   :: Wrk33(3,3)
    REAL(BDKi)                                   :: tildeE(3,3)
    REAL(BDKi)                                   :: C21(3,3)
@@ -2669,18 +2670,24 @@ SUBROUTINE BD_ElasticForce(nelem,p,m,fact)
    if (.not. fact) then
    
       do idx_qp=1,p%nqp
-         call Calc_Fc_Fd(m%qp%E1(:,idx_qp,nelem), m%qp%RR0(:,:,idx_qp,nelem), m%qp%kappa(:,idx_qp,nelem), &
-                         m%qp%Stif(:,:,idx_qp,nelem), p%Stif0_QP(:,:,(nelem-1)*p%nqp+idx_qp), &
-                         m%qp%Fc(:,idx_qp,nelem), m%qp%Fd(:,idx_qp,nelem))
+         call Calc_Fc_Fd( &
+            m%qp%E1(:,idx_qp,nelem), m%qp%RR0(:,:,idx_qp,nelem), m%qp%kappa(:,idx_qp,nelem), &
+            m%qp%Stif(:,:,idx_qp,nelem), eee, m%qp%Fc(:,idx_qp,nelem), m%qp%Fd(:,idx_qp,nelem))
+         call Calc_Fc_Fd_Add_Ext_Twist( &
+            m%qp%E1(:,idx_qp,nelem), m%qp%RR0(:,:,idx_qp,nelem), p%Stif0_QP(:,:,(nelem-1)*p%nqp+idx_qp), &
+            eee, cet, k1s, m%qp%Fc(:,idx_qp,nelem), m%qp%Fd(:,idx_qp,nelem))
       end do 
       
    else
    
       do idx_qp=1,p%nqp
       
-         call Calc_Fc_Fd(m%qp%E1(:,idx_qp,nelem), m%qp%RR0(:,:,idx_qp,nelem), m%qp%kappa(:,idx_qp,nelem), &
-                         m%qp%Stif(:,:,idx_qp,nelem), p%Stif0_QP(:,:,(nelem-1)*p%nqp+idx_qp), &
-                         m%qp%Fc(:,idx_qp,nelem), m%qp%Fd(:,idx_qp,nelem))
+         call Calc_Fc_Fd( &
+            m%qp%E1(:,idx_qp,nelem), m%qp%RR0(:,:,idx_qp,nelem), m%qp%kappa(:,idx_qp,nelem), &
+            m%qp%Stif(:,:,idx_qp,nelem), eee, m%qp%Fc(:,idx_qp,nelem), m%qp%Fd(:,idx_qp,nelem))
+         call Calc_Fc_Fd_Add_Ext_Twist( &
+            m%qp%E1(:,idx_qp,nelem), m%qp%RR0(:,:,idx_qp,nelem), p%Stif0_QP(:,:,(nelem-1)*p%nqp+idx_qp), &
+            eee, cet, k1s, m%qp%Fc(:,idx_qp,nelem), m%qp%Fd(:,idx_qp,nelem))
 
             !> ###Calculate the \f$ \underline{\underline{\mathcal{O}}} \f$ from equation (19)
             !!
@@ -2744,22 +2751,17 @@ SUBROUTINE BD_ElasticForce(nelem,p,m,fact)
 END SUBROUTINE BD_ElasticForce
 
 !-----------------------------------------------------------------------------------------------------------------------------------
-!> This subroutine calculates the elastic forces Fc and Fd
-subroutine Calc_Fc_Fd(E1, RR0, kappa, Stif, Stif0, Fc, Fd)
+!> This subroutine calculates the elastic force components Fc and Fd without extension twist coupling
+SUBROUTINE Calc_Fc_Fd(E1, RR0, kappa, Stif, eee, Fc, Fd)
 
    REAL(BDKi), INTENT(IN   ) :: E1(3)      !< \f$ \underline{E}_1 = x_0^\prime + u^\prime \f$ (equation 23). E_1 is along the z direction.
    REAL(BDKi), INTENT(IN   ) :: RR0(3,3)   !< Rotation matrix
    REAL(BDKi), INTENT(IN   ) :: kappa(3)   !< Sectional curvature
-   Real(BDKi), INTENT(IN   ) :: Stif(6,6)  !< Stiffness matrix in the deformed orientation
-   Real(BDKi), INTENT(IN   ) :: Stif0(6,6) !< Stiffness matrix in the non-deformed orientation
-   Real(BDKi), INTENT(INOUT) :: Fc(6)      !< Fc component of elastic force from Bauchau's textbook
-   Real(BDKi), INTENT(INOUT) :: Fd(6)      !< Fd component of elastic force from Bauchau's textbook
+   REAL(BDKi), INTENT(IN   ) :: Stif(6,6)  !< Stiffness matrix in the non-deformed orientation
+   REAL(BDKi), INTENT(INOUT) :: eee(6)     !< intermediate array for calculation Strain and curvature terms of Fc
+   REAL(BDKi), INTENT(INOUT) :: Fc(6)      !< Fc component of elastic force resulting from extension-twist coupling
+   REAL(BDKi), INTENT(INOUT) :: Fd(6)      !< Fd component of elastic force resulting from extension-twist coupling
 
-   REAL(BDKi)                :: cet        !< Eextension-twist stiffness coefficient
-   REAL(BDKi)                :: e1s        !< Axial extension
-   REAL(BDKi)                :: k1s        !< Blade's twist rate
-   REAL(BDKi)                :: eee(6)     !< intermediate array for calculation Strain and curvature terms of Fc
-   REAL(BDKi)                :: fff(6)     !< intermediate array for calculation of the elastic force, Fcs
 
    !> ### Calculate the 1D strain, \f$ \underline{\epsilon} \f$, equation (5)
    !! \f$ \underline{\epsilon} = \underline{x}^\prime_0 + \underline{u}^\prime -
@@ -2771,7 +2773,7 @@ subroutine Calc_Fc_Fd(E1, RR0, kappa, Stif, Stif0, Fc, Fd)
    !!
    !! Note: \f$ \underline{\underline{R}}\underline{\underline{R}}_0 \f$ is used to go from the material basis into the inertial basis
    !!       and the transpose for the other direction.
-   eee(1:3) = E1(1:3) - RR0(1:3,3)     ! Using RR0 z direction in IEC coords
+   eee(1:3) = E1 - RR0(:,3)     ! Using RR0 z direction in IEC coords
 
    !> ### Set the 1D sectional curvature, \f$ \underline{\kappa} \f$, equation (5)
    !! \f$ \underline{\kappa} = \underline{k} + \underline{\underline{R}}\underline{k}_i \f$
@@ -2791,7 +2793,7 @@ subroutine Calc_Fc_Fd(E1, RR0, kappa, Stif, Stif0, Fc, Fd)
    !!    \f$
    !! In other words, \f$ \tilde{k} = \left(\underline{\underline{R}}^\prime\underline{\underline{R}}^T \right) \f$.
    !! Note: \f$ \underline{\kappa} \f$ was already calculated in the BD_DisplacementQP routine
-   eee(4:6) = kappa(1:3)
+   eee(4:6) = kappa
 
    !FIXME: note that the k_i terms may not be documented correctly here.
    !> ### Calculate the elastic force, \f$ \underline{\mathcal{F}}^C \f$
@@ -2812,7 +2814,7 @@ subroutine Calc_Fc_Fd(E1, RR0, kappa, Stif, Stif0, Fc, Fd)
    !!
    !! where \f$ \underline{F}^c_{et} \f$ is the extension twist coupling term.
 
-   !> ###Calculate the first term.
+   !> ###Calculate Fc with extension-twist coupling.
    !!    \f$ \underline{F}^c_a
    !!       =  \left(\underline{\underline{R}}\underline{\underline{R}}_0\right)
    !!          \underline{\underline{C}}
@@ -2822,23 +2824,7 @@ subroutine Calc_Fc_Fd(E1, RR0, kappa, Stif, Stif0, Fc, Fd)
    !!                \underline{k}
    !!          \end{array} \right\} \f$
    !!
-   fff(1:6) = MATMUL(Stif,eee)
-
-   call Calc_Ext_Twist(RR0, eee, Stif0, cet, e1s, k1s)
-
-   !> Add extension twist coupling terms to the \f$ \underline{F}^c_{a} \f$\n
-   !! \f$ \underline{F}^c =
-   !!     \underline{F}^c_{a} + \underline{F}^c_{et} \f$\n
-   !! The extension twist term is calculated in the material basis, which can be simplified and rewritten as follows (_the details of this are fuzzy to me_):\n
-   !! \f$  \underline{F}^c_{et} =
-   !!     \begin{bmatrix}
-   !!          \frac{1}{2} C_{et} \kappa^2_{m}(1) \left(\underline{\underline{R}}\underline{\underline{R}}_0\right)_{:,1} \\
-   !!        C_{et} \kappa_{m}(1) \epsilon_{m}(1) \left(\underline{\underline{R}}\underline{\underline{R}}_0\right)_{:,1}
-   !!     \end{bmatrix}
-   !! \f$
-   cet     = Stif0(4,4) + Stif0(5,5)                     ! Dymore theory (22)
-   Fc(1:3) = fff(1:3) + 0.5_BDKi*cet*k1s*k1s*RR0(1:3,3)  ! Dymore theory (25a). Note z-axis is the length of blade.
-   Fc(4:6) = fff(4:6) +          cet*e1s*k1s*RR0(1:3,3)  ! Dymore theory (25b). Note z-axis is the length of blade.
+   Fc = MATMUL(Stif,eee)
 
    !> ###Calculate \f$ \underline{\mathcal{F}}^d \f$, equation (16)
    !! \f$ \underline{F}^d =
@@ -2856,15 +2842,19 @@ subroutine Calc_Fc_Fd(E1, RR0, kappa, Stif, Stif0, Fc, Fd)
 end subroutine Calc_Fc_Fd
 
 !-----------------------------------------------------------------------------------------------------------------------------------
-!> This subroutine calculates  components of the axial-twist coupling required by Calc_Fc_Fd
-SUBROUTINE Calc_Ext_Twist(RR0, eee, Stif0, cet, e1s, k1s)
+!> This subroutine calculates the elastic forces due to the axial-twist coupling
+SUBROUTINE Calc_Fc_Fd_Add_Ext_Twist(E1, RR0, Stif0, eee, cet, k1s, Fc, Fd)
 
+   REAL(BDKi), INTENT(IN   ) :: E1(3)      !< \f$ \underline{E}_1 = x_0^\prime + u^\prime \f$ (equation 23). E_1 is along the z direction.
    REAL(BDKi), INTENT(IN   ) :: RR0(3,3)   !< Rotation matrix
-   REAL(BDKi), INTENT(IN   ) :: eee(6)     !< strain vector
-   Real(BDKi), INTENT(IN   ) :: Stif0(6,6) !< Stiffness matrix in the non-deformed orientation
+   REAL(BDKi), INTENT(IN   ) :: Stif0(6,6) !< Stiffness matrix in the non-deformed orientation
+   REAL(BDKi), INTENT(IN   ) :: eee(6)     !< Strain and curvature terms vector
    REAL(BDKi), INTENT(INOUT) :: cet        !< Eextension-twist stiffness coefficient
-   REAL(BDKi), INTENT(INOUT) :: e1s        !< Axial extension
    REAL(BDKi), INTENT(INOUT) :: k1s        !< Blade's twist rate
+   REAL(BDKi), INTENT(INOUT) :: Fc(6)      !< Fc component of elastic force resulting from extension-twist coupling
+   REAL(BDKi), INTENT(INOUT) :: Fd(6)      !< Fd component of elastic force resulting from extension-twist coupling
+
+   REAL(BDKi)                :: e1s        !< Axial extension
 
 
    !> ###Calculate the extension twist coupling.
@@ -2888,7 +2878,22 @@ SUBROUTINE Calc_Ext_Twist(RR0, eee, Stif0, cet, e1s, k1s)
    ! Refer Section 1.4 in "Dymore User's Manual - Formulation and finite element implementation of beam elements".
    cet = Stif0(4,4) + Stif0(5,5)                     ! Dymore theory (22)
 
-end subroutine Calc_Ext_Twist
+   !! The extension twist term is calculated in the material basis, which can be simplified and rewritten as follows (_the details of this are fuzzy to me_):\n
+   !! \f$  \underline{F}^c_{et} =
+   !!     \begin{bmatrix}
+   !!          \frac{1}{2} C_{et} \kappa^2_{m}(1) \left(\underline{\underline{R}}\underline{\underline{R}}_0\right)_{:,1} \\
+   !!        C_{et} \kappa_{m}(1) \epsilon_{m}(1) \left(\underline{\underline{R}}\underline{\underline{R}}_0\right)_{:,1}
+   !!     \end{bmatrix}
+   !! \f$
+   Fc(1:3) = Fc(1:3) + 0.5_BDKi*cet*k1s*k1s*RR0(:,3)  ! Dymore theory (25a). Note z-axis is the length of blade.
+   Fc(4:6) = Fc(4:6) +          cet*e1s*k1s*RR0(:,3)  ! Dymore theory (25b). Note z-axis is the length of blade.
+
+   !> ###Calculate \f$ \underline{\mathcal{F}}^d \f$, same as in Calc_Fc_Fd_No_Ext_Twist
+   !!       \end{bmatrix}  \f$
+   Fd(1:3) = 0.0_BDKi
+   Fd(4:6) = cross_product(Fc(1:3), E1)
+
+end subroutine Calc_Fc_Fd_Add_Ext_Twist
 
 !-----------------------------------------------------------------------------------------------------------------------------------
 !> This subroutine calculates the mass quantities at the quadrature point
